@@ -1,0 +1,269 @@
+##--------------------------------------------------##
+# Model Fit, estimate alpha (beta)
+# Use DM to fit data
+# Functions
+##--------------------------------------------------##
+
+##--- PDF with constant (y factorials), log likelihood for one observation---##
+# this function takes the following inputs:
+# the total count (y_i) and alpha parameters
+# for the i^th individual and returns the 
+# PDF of the DM regression for the individual
+
+DM_pdf <- function(y_i, alpha_i) 
+  {
+  
+  firstt <- 0
+  for (d in 1:D) {
+
+      if (y_i[d] > 0) {
+
+        # sum over l = 0, ..., y_id - 1
+        l_seq       <- seq(0, y_i[d] - 1)
+        inner_sum   <- sum(log(alpha_i[d] + l_seq))
+
+        # multiply by c_id and accumulate
+        firstt <- firstt + inner_sum
+
+      }
+      # if y_i[d] = 0, sum is empty so contributes 0
+  }
+  
+  # second term
+  mi <- sum(y_i)
+  secondt <- sum(log(c(seq(0, (mi-1))) + sum(alpha_i)))
+  
+  # third term
+  thirdt <- lfactorial(mi) - sum(lfactorial(y_i)) 
+  
+  # PDF
+  pdf <- firstt - secondt + thirdt
+
+  return(pdf)
+  
+  }
+
+##--- Log likelihood ---##
+# this function takes the following inputs:
+# par (beta estimates), Y (nxD count matrix),
+# and X (nxp covariate matrix).
+# The function returns the -ve log likelihood 
+# at the beta estimates.
+
+DM_loglik <- function(par, Y, X, minimize = TRUE) {
+  n <- length(X[,1])
+  p <- length(X[1,])
+  D <- length(Y[1,])
+  
+  # initializing the log-likelihood 
+  loglik_it <- matrix(rep(0, n), nrow = n, ncol = 1) 
+  
+  # likelihood for each individual
+  for (i in 1:n){
+    loglik_it[i] <- (DM_pdf(Y[i,], exp(X[i,]%*%matrix(c(par),nrow = p, ncol = D))))
+  }
+  
+  # sum log likelihood
+  loglik <- sum(loglik_it)
+  
+  if (minimize) {
+    return(-loglik)
+  } else {return(loglik)}
+}
+
+##--- Score vector ---##
+# this function takes the following inputs:
+# par (beta estimates), Y (nxD count matrix),
+# and X (nxp covariate matrix).
+# The function returns the p*Dx1 score vector 
+# at the beta estimates.
+
+Score <- function(par, Y, X, minimize = TRUE) {
+  
+  p <- length(X[1,])
+  D <- length(Y[1,])
+  a <- exp(X %*% matrix(par, nrow = p, ncol = D))  
+  aplus <- rowSums(a)
+  yplus <- rowSums(Y)
+  
+  S     <- t((digamma(aplus) - digamma(yplus + aplus) + digamma(Y + a) - digamma(a)) * a) %*% (X)
+  S     <- t(S)
+  
+  if (minimize) {
+    return(c(-S)) 
+  } else {return(c(S))}
+}
+
+##--------------------------------------------------##
+##--- Initial Estimation of betas ---##
+# this function takes the following inputs:
+# B (start values), Y (nxD count matrix),
+# X (nxp covariate matrix), method (for optimization),
+# and maxiter (the maximum # of iterations for algorithm).
+
+optim_func <- function(B, Y, X, method = "BFGS", maxiter) {
+  set.seed(1)
+  n     <- length(X[,1])
+  D     <- length(Y[1,])
+  p     <- length(X[1,])
+
+  B_est = optim(par = c(B), fn = DM_loglik, gr = Score, method = "BFGS", 
+                Y = Y, X = X, minimize = TRUE, 
+                control = list(maxit = maxiter, reltol = 1e-03))
+  conv = B_est$convergence
+  iter = B_est$counts
+  est  = B_est$par
+  if(conv != 0) {
+    warning("Warning: Convergence not reached. Check convergence code.")
+  }
+  
+  return(list("est" = est, "conv" = conv, "iter" = iter))
+}
+
+##--------------------------------------------------##
+##--- Weights and working response ---##
+# this function takes the following inputs:
+# m (nx1 vector of total counts), alpha (exp(xB)),
+# ncol (# of taxa).
+# The function returns a list containing:
+# the Dxn weight matrix
+# and the nx1 working response vector 
+
+iter_values <- function(X, beta, Y) {
+  
+  # defining parameters
+  alpha   <- exp(X%*%beta) 
+  m       <- rowSums(Y)  
+  n       <- length(X[,1])
+  D       <- length(Y[1,])
+
+  ## Calculating weights and working response for poisson
+
+  # weights
+  weight_mat <- matrix(1, ncol = D, nrow = n) 
+  
+  for (i in 1:n) {
+    l0 <- (1:m[i]) - 1
+    for (j in 1:D) {
+      weight_mat[i,j] <- sum(1/(sum(alpha[i,])+l0))
+    }
+  }
+  
+  # working response
+  Y_new <- Y*0
+
+  for (i in 1:n) 
+  {for (j in 1:D) 
+    {if (Y[i,j] != 0) 
+        {l0 <- (1:Y[i,j]) - 1
+         Y_new[i,j] <- (sum(alpha[i,j]/(alpha[i,j]+l0)))/weight_mat[i,j]        
+        }
+      else Y_new[i,j] <- 0                                                
+    }    
+  }
+  
+  return(list("weight_mat" = weight_mat, "Y_new" = Y_new))
+  
+}
+
+##--------------------------------------------------##
+# Update beta for each outcome via iteratively reweighted Poisson regression (IRPR)
+# Zhang
+
+CONV_TOL <- 1e-8   # beta / likelihood convergence tolerance
+
+final_mm <- function(X, Y, B_init, maxiter) {
+   
+   n <- nrow(X)
+   p <- ncol(X)
+   D <- ncol(Y)
+  
+   # initialize
+   B_pre_loop <- B_init
+   beta_MM    <- matrix(0, nrow = p, ncol = D)
+   beta_conv  <- numeric(maxiter)
+   mm_iter    <- 1
+  
+   x.ind.mat <- matrix(TRUE, nrow = p, ncol = D)
+  
+   # Scale X (intercept column left unscaled)
+   # XS <- X
+   # XS[, -1] <- scale(X[, -1])
+   
+   BIC_track <- numeric(maxiter)
+   AIC_track <- numeric(maxiter)
+   beta_conv <- numeric(maxiter)
+   
+repeat {
+  
+  # compute weights and working response
+  B_pre_loop_fit <- B_pre_loop * x.ind.mat
+  iter_calc      <- iter_values(X, B_pre_loop_fit, Y)
+  weight_mat     <- iter_calc$weight_mat
+  Y_new          <- iter_calc$Y_new
+  
+  df_hat         <- numeric(D)
+  
+  # update beta for each outcome
+  for (j in 1:D) {
+    
+     eta <- X %*% B_pre_loop_fit[, j]
+     mu  <- exp(eta)
+     Z   <- eta + (Y_new[, j] - mu) / mu  # working response
+     Wt  <- diag(c(mu * weight_mat[, j])) # weight matrix
+    
+     # replace NA/NaN/Inf in Wt
+     Wt[is.nan(Wt) | is.na(Wt) | is.infinite(Wt)] <- 0
+     
+  if (all(abs(diag(Wt)) < CONV_TOL)) {
+      beta_MM[, j] <- 0} 
+  else {
+        A   <- t(X) %*% Wt %*% X
+        rhs <- t(X) %*% Wt %*% Z
+        beta_MM[, j] <- solve(A) %*% rhs
+  }
+     
+     # clean beta_MM
+     beta_MM[is.na(beta_MM) | is.infinite(beta_MM)] <- 0
+     
+     df_hat[j] <- sum(abs(beta_MM[, j]) > 0)   
+  }
+  
+  # convergence and information criteria
+  B_old      <- B_pre_loop
+  B_pre_loop <- beta_MM
+
+  # Compute information criteria at current estimates
+  log_lik_est         <- DM_loglik(beta_MM, Y, X, minimize = TRUE) # negative
+  parn                <- sum(df_hat)
+  BIC_track[mm_iter]  <- 2 * log_lik_est + parn * log(n)
+  AIC_track[mm_iter]  <- 2 * log_lik_est + 2 * parn
+  beta_conv[mm_iter]  <- max(abs(B_old - beta_MM))
+  
+#  cat("Iter =", mm_iter," MaxDiff =", max(abs(B_old - beta_MM)),
+#    " LogLik =", log_lik_est, "\n")
+  
+  # check convergence
+  if (!is.na(beta_conv[mm_iter]) && beta_conv[mm_iter] < CONV_TOL) {
+    cat("Converged at iteration:", mm_iter, "\n")
+    break
+  }
+  
+  if (mm_iter >= maxiter) {
+    cat("Reached maximum iterations:", maxiter, "\n")
+    break
+  }
+  
+  mm_iter <- mm_iter + 1
+  }
+  
+  return(list(
+    B          = beta_MM,
+    alpha      = exp(X %*% beta_MM),
+    beta_conv  = beta_conv[1:mm_iter],
+    iterations = mm_iter,
+    log_like   = log_lik_est,
+    all_BIC    = BIC_track[1:mm_iter],
+    all_AIC    = AIC_track[1:mm_iter]
+  ))
+}
