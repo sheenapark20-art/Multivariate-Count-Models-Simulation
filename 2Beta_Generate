@@ -1,0 +1,83 @@
+#######################################################
+# Generating data for simulation (testing scenario 1)
+#######################################################
+# The code below generates p covariates
+# from multivariate normal and 
+# D counts from Dirichlet-multinomial
+# based on specified true beta values 
+
+library(mvtnorm)              # required for multivariate normal
+source("1DM_Data_Generate.R") # required for rdirm function
+
+##--------------------------------------------------##
+## variance covariance matrix, n_cov is the number of covariates
+ar1_cor <- function(n_cov, rho) {
+  exponent <- abs(matrix(1:n_cov - 1, nrow = n_cov, ncol = n_cov, byrow = TRUE) - 
+                  (1:n_cov - 1))
+  rho^exponent
+}
+
+##--------------------------------------------------##
+sim_dat <- function(n_rep, n, n_cov, D, f, p_rel, d_rel, tot_count, tot_count_rand = TRUE) 
+  {
+  ## Setting seed
+  set.seed(99)
+  
+  # theta <- theta
+  p  <- n_cov + 1
+  pr <- floor(p_rel*n_cov)
+  Dr <- ceiling(d_rel*D)
+  if (tot_count_rand) {
+    tot_count <- rpois(n, tot_count)
+  }
+  
+  ##--------------------------------------------------##
+  ## parameters for generating X from MVN(0, sigma)
+  cov <- ar1_cor(n_cov, 0.4)
+  mu  <- rep(0, n_cov)
+  
+  ##--------------------------------------------------##
+  ## Generating coefficient matrix
+  
+  # B0
+  b0 <- runif(D, min = -2.3, max = 2.3) # min and max taken from Chen & Li (2013)
+  
+  # Bjk for k > 0
+  B_sim <- matrix(seq(0.6*f, 0.9*f, length.out = n_cov*D), ncol = D, nrow = n_cov)
+  
+  # setting betas to zero
+  B_sim[-c(sample(1:n_cov, size = pr)),] <- 0
+  rel_tax <- sapply(1:n_cov, 
+                    function(i) return(ifelse(1:D %in% sample(1:D, Dr), 1:D, 0)))
+  B_sim <- as.numeric(t(rel_tax)>0)*B_sim
+  
+  # changing signs
+  B_sim[B_sim>0] <- B_sim[B_sim>0]*ifelse(rbinom(length(B_sim[B_sim > 0]), 1, 0.5) > 0, 
+                                          1, -1)
+  
+  
+  # rbind the intercept
+  B_sim <- rbind(b0, B_sim)
+  
+  ##--------------------------------------------------##
+  ## generating 100 datasets
+  data <- list()
+  
+  # should continuous covariates be shuffled so non-zero more correlated with zero?
+  
+  for (i in 1:n_rep){
+    data[[i]]           <- cbind(rmvnorm(n, mu, cov))  
+    data[[i]]           <- cbind(data[[i]], exp(cbind(1, data[[i]])%*%B_sim)) # Add Alpha
+    data[[i]]           <- cbind(data[[i]], rdirm(tot_count, data[[i]][,p:(p+D-1)], 
+                                                  n, method = "beta", const_disp = FALSE)) 
+    data[[i]]           <- cbind(data[[i]], rdirm(tot_count, data[[i]][,p:(p+D-1)], 
+                                                  n, method = "gamma", const_disp = FALSE)) 
+    colnames(data[[i]]) <- c(paste("X", 1:(p-1), sep = ""), 
+                             paste("Alpha", 1:D, sep = ""), 
+                             paste("Ybeta", 1:D, sep = ""), 
+                             paste("Ygamma", 1:D, sep = ""))
+  }
+  
+  return(list("data" = data, "B_sim" = B_sim))
+  
+}
