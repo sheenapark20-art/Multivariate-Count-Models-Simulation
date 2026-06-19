@@ -1,0 +1,116 @@
+##############################################################################
+# Function to generate data from dirichlet-multinomial, from Alysha Cooper
+##############################################################################
+# This function is used to generate data from dirichlet-multinomial
+# and has the following inputs: size, alpha, n, method.
+# Size is an nx1 vector of total counts for each observation. 
+# Alternatively, size can be a scalar if all observations have the same size.
+# Alpha is the nxD matrix of parameters for Dirichlet.
+# Alternatively, alpha can be a Dx1 vector if the parameters are the same for all observations. 
+# n is the sample size you wish to generate
+# and is optional is alpha is a matrix.
+# Method refers to how data is generated from the Dirichlet distribution.
+# The data can be generated using the "gamma" method or the "beta" (ie stick breaking) method.
+# This function has the following output: nxD dataset of generated counts
+
+#### Should we have the option to change the dispersion of the gamma distn as cathy did?
+
+# multirng has scale parameter beta such that we can draw from gamma(alpha, beta) instead of gamma(alpha, 1)
+
+Sys.setenv(LANG="en")
+
+rdirm <- function(size, alpha, n, method="gamma", const_disp = TRUE, disp_param = 0.005, beta = 1) {
+  require(gtools)
+  
+  ##--------------------------------------------------##
+  ## Warnings/errors
+  
+  # make sure n is known
+  
+  if(is.vector(alpha) && missing(n)){
+    stop("When alpha is a vector, must give n.")
+  }
+  
+  # make alpha a nxD matrix (if vector)
+  if(is.vector(alpha) && length(alpha)>1){
+    alpha <- matrix(alpha, n, length(alpha), byrow=TRUE)
+  }
+  
+  # calculate n from alpha if missing
+  else if(!is.vector(alpha) && missing(n)){
+    n <- nrow(alpha) 
+  }
+  
+  # check that n is scalar
+  else if(length(n)!=1) {
+    stop("n must be a scalar")
+  }
+  
+  # ensure n corresponds with alpha
+  else if(n!=nrow(alpha)){
+    stop("alpha must be a matrix of n rows.")
+  }
+  
+  # make size a nx1 vector (if scalar)
+  if(length(size)==1){
+    size <- rep(size,n) 
+  }
+  
+  # ensure size and n correspond
+  else if(length(size)!=n){
+    stop("The length of size variable doesn't match with sample size")
+  }
+  
+  # make sure dispersion parameter is positive
+  if(const_disp & (disp_param <= 0 | disp_param >= 1)){
+    stop("The dispersion parameter must be between 0 and 1.")
+  }
+  
+  
+  ##----------------------------------------##
+  
+  ## Change alpha to reflect dispersion
+  if (const_disp) {
+    alpha = alpha/rowSums(alpha)
+    alpha = ((1-disp_param)/disp_param)*alpha
+  }
+  
+  ## Generate data
+  
+  if(method=="gamma") {
+    
+    # generate data from independent gammas
+    G <- sapply(c(alpha), "rgamma", n=1, beta) 
+    G <- matrix(G, nrow=n)  
+    
+    # normalize into probabilities
+    prob <- G/rowSums(G)
+    
+    # normalizing obs with row sum = 0
+    ridx <- rowSums(G)==0 
+    if(any(ridx)){ 
+      if(sum(ridx)>1){ 
+        prob[ridx, ] <- t(apply((alpha[ridx, ]/rowSums(alpha[ridx, ])),1,
+                                function(x) return(rmultinom(n=1, size=1, prob=x))))
+      }
+      else{ 
+        prob[ridx,]<- rmultinom(n=1, size=1, alpha[ridx, ]/sum(alpha[ridx, ]))
+      }
+    }	
+    rdm <- t(sapply(1:n, function(i, size, prob) 
+      return(rmultinom(n=1, size=size[i], prob=prob[i,])), size,prob))
+    
+  }
+  
+  else if(method=="beta"){
+    
+    # draw D probs from dirichlet distribution
+    prob <-  t(sapply(1:n, function(i) 
+               return(rdirichlet(n=1, alpha=alpha[i,]))))
+    
+    # draw D counts from multinomial distribution
+    rdm <- t(sapply(1:n, function(i, size, prob) 
+             return(rmultinom(n=1, size=size[i], prob=prob[i,])), size,prob)) 
+  }
+  return(rdm)
+}
