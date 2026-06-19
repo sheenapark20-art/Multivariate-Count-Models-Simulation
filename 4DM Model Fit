@@ -1,0 +1,120 @@
+setwd("D:/Personal Info/Guelph/PhD/Literature Review/2026 Summer/Codes/Simulation/")
+getwd()
+source("2Beta_Generate.R")
+source("3DM Functions.R")
+
+##--------------------------------------------------##
+# Simulation Design
+n_cov     <- c(25, 50, 100)
+D         <- c(7, 12)
+f         <- c(0.8, 0.2)
+theta     <- c(0.005)
+p_rel     <- c(0.1, 0.25, 0.5)
+d_rel     <- c(0.25, 0.5)
+n         <- c(100, 300, 500)
+tot_count <- c(5000)
+n_rep     <- c(100)
+
+##--------------------------------------------------##
+# Simulate one dataset
+#sim_dat <- function(n_rep, n, n_cov, D, f, p_rel, d_rel, tot_count, tot_count_rand = TRUE)
+set.seed(123)
+gen_data <- sim_dat(1, 100, 10, 5, 0.8, 1, 1, 5000, tot_count_rand = TRUE)
+B_sim    <- gen_data$B_sim
+data     <- gen_data$data
+
+result_file <- "Results"
+
+saveRDS(data,  file.path(result_file, "DM", "data_sim.rds"))
+saveRDS(B_sim, file.path(result_file, "DM", "B_sim.rds"))
+
+##--------------------------------------------------##
+# Read files
+data <- readRDS("Results/DM/data_sim.rds")
+B_sim <- readRDS("Results/DM/B_sim.rds")
+
+n_cov <- 10
+D <- 5
+Y <- data[[1]][, (n_cov+D+1):(n_cov+2*D)]
+X <- cbind(1, data[[1]][, 1:n_cov])
+alpha_true <- data[[1]][, (n_cov+1):(n_cov+D)]
+
+##--------------------------------------------------##
+# Get beta initial value
+beta_init <- matrix(rep(0, (n_cov+1)*D), nrow = (n_cov+1), ncol = D)
+beta_BFGS <- optim_func(beta_init, Y, X, method = "BFGS", 20)
+
+# Fit model using MM
+# result0 <- final_mm(X, Y, rep(0, (n_cov+1)*D), maxiter = 100)
+
+result <- final_mm(X, Y, beta_BFGS$est, maxiter = 1000) # BFGS method
+
+##--------------------------------------------------##
+# Compare with initial beta
+beta_first <- matrix(beta_BFGS$est, nrow = (n_cov+1), ncol = D)
+df_hat <- sapply(1:D, function(i) return(sum(abs(beta_first[, i]) > 0)))
+
+log_lik_est <- DM_loglik(beta_BFGS$est, Y, X, minimize = TRUE) # negative
+parn        <- sum(df_hat)
+BIC         <- 2 * log_lik_est + parn * log(n)
+AIC         <- 2 * log_lik_est + 2 * parn
+
+##--------------------------------------------------##
+# Compare with true beta
+df_hat0 <- sapply(1:D, function(i) return(sum(abs(B_sim[, i]) > 0)))
+
+log_lik_est0 <- DM_loglik(c(B_sim), Y, X, minimize = TRUE) # negative
+parn         <- sum(df_hat0)
+BIC0         <- 2 * log_lik_est0 + parn * log(n)
+AIC0         <- 2 * log_lik_est0 + 2 * parn
+
+# Plots, check trend
+library(ggplot2)
+
+## BIC
+bic <- result$all_BIC
+df <- data.frame(
+  iter = seq_along(bic),
+  BIC = bic
+)
+
+min_iter <- which.min(bic)
+
+ggplot(df, aes(x = iter, y = BIC)) +
+  geom_line(linewidth = 1.1, color = "#2C3E50") +
+  geom_point(size = 2, color = "#2C3E50") +
+  
+  # highlight minimum
+  geom_point(data = df[min_iter, ],
+             aes(x = iter, y = BIC),
+             color = "red", size = 3) +
+  
+  geom_text(data = df[min_iter, ],
+            aes(label = paste0("min @ ", iter)),
+            vjust = -1, color = "red") +
+  
+  labs(
+    title = "BIC Convergence Path",
+    x = "Iteration",
+    y = "BIC"
+  ) +
+  
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank()
+  )
+
+BIC_summary <- cbind(BIC0, BIC, result$all_BIC[which.min(bic)])
+
+# Compare with package built by Zhang
+##--------------------------------------------------##
+# Consider covariates
+data_dm_sim <- as.data.frame(cbind(Y, X[,2:11]))
+
+dmreg <- MGLMreg(formula = Y ~ X1 + X2 + X3 + X4 + X5 + X6 + X7 + X8 + X9 + X10, 
+                 data = data_dm_sim, dist = "DM")
+print(dmreg)
+# BIC 4074.172
+
+BIC_summary <- cbind(BIC_summary, 4074.172)
