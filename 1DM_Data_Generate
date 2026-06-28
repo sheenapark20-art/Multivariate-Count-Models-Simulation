@@ -19,7 +19,7 @@
 
 Sys.setenv(LANG="en")
 
-rdirm <- function(size, alpha, n, method="gamma", const_disp = TRUE, disp_param = 0.005, beta = 1) {
+rdirm <- function(size, alpha, n, method = "gamma", const_disp = TRUE, disp_param = 0.005, beta = 1) {
   require(gtools)
   
   ##--------------------------------------------------##
@@ -77,40 +77,42 @@ rdirm <- function(size, alpha, n, method="gamma", const_disp = TRUE, disp_param 
   
   ## Generate data
   
-  if(method=="gamma") {
+  if(method == "gamma") {
     
     # generate data from independent gammas
-    G <- sapply(c(alpha), "rgamma", n=1, beta) 
-    G <- matrix(G, nrow=n)  
+    G <- sapply(c(alpha), "rgamma", n = 1, beta) 
+    G <- matrix(G, nrow = n)  
     
     # normalize into probabilities
     prob <- G/rowSums(G)
     
     # normalizing obs with row sum = 0
-    ridx <- rowSums(G)==0 
+    ridx <- rowSums(G) == 0
+    
     if(any(ridx)){ 
-      if(sum(ridx)>1){ 
-        prob[ridx, ] <- t(apply((alpha[ridx, ]/rowSums(alpha[ridx, ])),1,
-                                function(x) return(rmultinom(n=1, size=1, prob=x))))
+      if(sum(ridx) > 1){ 
+         prob[ridx, ] <- t(apply((alpha[ridx, ]/rowSums(alpha[ridx, ])), 1,
+                                  function(x) return(rmultinom(n = 1, size = 1, prob = x))))
       }
       else{ 
-        prob[ridx,]<- rmultinom(n=1, size=1, alpha[ridx, ]/sum(alpha[ridx, ]))
+         prob[ridx, ] <- rmultinom(n = 1, size = 1, alpha[ridx, ]/sum(alpha[ridx, ]))
       }
-    }	
+    }
+    
     rdm <- t(sapply(1:n, function(i, size, prob) 
-      return(rmultinom(n=1, size=size[i], prob=prob[i,])), size,prob))
+             return(rmultinom(n = 1, size = size[i], prob = prob[i,])), size, prob))
     
   }
   
-  else if(method=="beta"){
+  else if(method == "beta"){
     
     # draw D probs from dirichlet distribution
-    prob <-  t(sapply(1:n, function(i) 
-               return(rdirichlet(n=1, alpha=alpha[i,]))))
+    prob <- t(sapply(1:n, function(i) 
+              return(rdirichlet(n = 1, alpha = alpha[i,]))))
     
     # draw D counts from multinomial distribution
     rdm <- t(sapply(1:n, function(i, size, prob) 
-             return(rmultinom(n=1, size=size[i], prob=prob[i,])), size,prob)) 
+             return(rmultinom(n = 1, size = size[i], prob = prob[i,])), size, prob)) 
   }
   return(rdm)
 }
